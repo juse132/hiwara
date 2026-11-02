@@ -1,0 +1,79 @@
+name: Build iOS IPA (Unsigned)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install CocoaPods
+        run: brew install cocoapods
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Init Tauri iOS project
+        run: npx tauri ios init
+
+      - name: Build Rust for iOS
+        run: |
+          cd src-tauri
+          cargo build --release --target aarch64-apple-ios
+
+      - name: Install Pods
+        run: |
+          cd src-tauri/gen/apple
+          pod install
+
+      - name: Build Xcode project (no signing)
+        run: |
+          cd src-tauri/gen/apple
+          # 找到 scheme 名称
+          SCHEME=$(xcodebuild -list -project Hiwara.xcodeproj 2>/dev/null | grep -A10 "Schemes:" | tail -n +2 | head -1 | xargs)
+          echo "Scheme: $SCHEME"
+
+          xcodebuild archive \
+            -project Hiwara.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -archivePath build/Hiwara.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Package IPA (unsigned)
+        run: |
+          cd src-tauri/gen/apple/build/Hiwara.xcarchive/Products/Applications
+          ls -la
+
+          # 创建 Payload 目录结构
+          mkdir -p Payload
+          cp -r *.app Payload/
+
+          # 打包成 ipa
+          zip -r ../../../Hiwara-unsigned.ipa Payload
+          cd ../../../
+          ls -la Hiwara-unsigned.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: hiwara-ios-unsigned-ipa
+          path: src-tauri/gen/apple/Hiwara-unsigned.ipa
